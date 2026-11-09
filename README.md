@@ -15,7 +15,7 @@ npm start
 
 Then open [http://localhost:3000](http://localhost:3000).
 
-`OPENAI_API_KEY` is optional. When it is present, the server uses the OpenAI Responses API with strict JSON-schema outputs. Without it, the complete demo path uses a deterministic repository-evidence mode; that mode still reads and teaches from the live public repository rather than returning canned data.
+`OPENAI_API_KEY` is optional. With it, the server uses the OpenAI Responses API with strict JSON-schema output, and verifies every code excerpt against the repository before showing it. Without it, the full path still works: trails and lessons are built by reading the code's structure, and the app says so on screen.
 
 Optional environment variables:
 
@@ -26,9 +26,11 @@ Optional environment variables:
 ## Architecture
 
 - `server.mjs` — dependency-free HTTP server and API routes.
-- `src/repository.mjs` — GitHub URL parsing, metadata/tree retrieval, source selection, and compact context creation.
-- `src/curriculum.mjs` — structured model calls plus the evidence-grounded local curriculum and lesson generator.
-- `public/` — the authored landing, trail, lesson, quiz, loading, and error experience.
+- `src/repository.mjs` — GitHub URL parsing, metadata/tree retrieval, file selection that follows imports, and compact context creation.
+- `src/codeGraph.mjs` — regex-based reader that finds functions and who calls whom across languages.
+- `src/evidence.mjs` — trails and lessons built from that graph, including how the project is built and run. Quiz answers are computed from it.
+- `src/curriculum.mjs` — structured model calls, and validation of what the model returns.
+- `public/` — `app.js` (state and routing), `api.js`, `views.js` (landing, trail), `lesson.js` (the six lesson stages), `ui.js`.
 
 Repository sessions live in server memory for three hours. There is no authentication or persistent progress in this MVP.
 
@@ -38,4 +40,4 @@ Repository sessions live in server memory for three hours. There is no authentic
 npm test
 ```
 
-The tests cover URL validation, noise filtering, entry-point prioritization, context bounding, repository-specific trail generation, and grounded lesson generation.
+The tests cover URL handling, file filtering, the code graph, lesson grounding, and the model path with a stubbed API.

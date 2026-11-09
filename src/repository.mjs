@@ -1,3 +1,5 @@
+import { extractLocalImports, isTestPath } from "./codeGraph.mjs";
+
 const SOURCE_EXTENSIONS = new Set([
   "js", "jsx", "ts", "tsx", "mjs", "cjs", "py", "rb", "php", "java", "kt", "kts",
   "go", "rs", "c", "h", "cpp", "cc", "hpp", "cs", "swift", "vue", "svelte", "html",
@@ -12,11 +14,17 @@ const MANIFEST_NAMES = new Set([
 
 const IGNORED_SEGMENTS = new Set([
   ".git", "node_modules", "vendor", "dist", "build", ".next", ".nuxt", "coverage",
-  "target", "bin", "obj", ".cache", ".idea", ".vscode", "__pycache__", "fixtures"
+  "target", "obj", ".cache", ".idea", ".vscode", "__pycache__", "fixtures", "third_party",
+  "third-party", "bower_components", ".venv", "venv", "site-packages", "generated", "__snapshots__"
 ]);
 
-const IGNORED_FILES = /(?:\.min\.(?:js|css)$|\.map$|(?:^|\/)(?:package-lock|yarn\.lock|pnpm-lock|bun\.lockb|poetry\.lock|cargo\.lock)$)/i;
-const ENTRY_NAMES = /(?:^|\/)(?:main|index|app|server|client|program|cli|application|game|src\/lib)\.(?:[cm]?[jt]sx?|py|rb|php|java|kt|go|rs|c|cc|cpp|cs|swift|vue|svelte)$/i;
+const IGNORED_FILES = /(?:\.min\.(?:js|css)$|\.map$|\.d\.ts$|\.generated\.|\.pb\.go$|(?:^|\/)(?:package-lock|yarn|pnpm-lock|bun|poetry|cargo|composer|gemfile)\.lock(?:\.json)?$|(?:^|\/)package-lock\.json$|(?:^|\/)\.env[^/]*$|(?:secrets?|credentials?)\.[^/]+$)/i;
+const MAX_SOURCE_BYTES = 120_000;
+const MAX_CHARACTERS_PER_FILE = 42_000;
+const FIRST_PASS_FILES = 20;
+const MAX_FILES = 34;
+const MAX_TOTAL_CHARACTERS = 260_000;
+const ENTRY_NAMES = /(?:^|\/)(?:main|index|app|server|client|program|cli|application|game|lib)\.(?:[cm]?[jt]sx?|py|rb|php|java|kt|go|rs|c|cc|cpp|cs|swift|vue|svelte)$/i;
 
 export class AppError extends Error {
   constructor(message, status = 400, code = "REQUEST_ERROR") {
@@ -28,26 +36,34 @@ export class AppError extends Error {
 }
 
 export function parseGitHubUrl(value) {
+  const raw = String(value || "").trim();
+  const ssh = raw.match(/^git@github\.com:(.+)$/i);
+  const shorthand = /^[\w.-]+\/[\w.-]+$/.test(raw) && !/^github\.com\//i.test(raw);
+  const normalized = ssh ? `https://github.com/${ssh[1]}`
+    : shorthand ? `https://github.com/${raw}`
+    : /^(?:www\.)?github\.com\//i.test(raw) ? `https://${raw}`
+    : raw;
+
   let url;
   try {
-    url = new URL(String(value || "").trim());
+    url = new URL(normalized);
   } catch {
-    throw new AppError("Paste a full GitHub URL, like https://github.com/username/repo.", 400, "INVALID_URL");
+    throw new AppError("That's not a GitHub repo link.", 400, "INVALID_URL");
   }
 
   if (!["github.com", "www.github.com"].includes(url.hostname.toLowerCase())) {
-    throw new AppError("Tell-itty currently reads public repositories on github.com.", 400, "INVALID_HOST");
+    throw new AppError("Only github.com repos for now.", 400, "INVALID_HOST");
   }
 
   const parts = url.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
   if (parts.length < 2) {
-    throw new AppError("That URL is missing an owner or repository name.", 400, "INVALID_URL");
+    throw new AppError("That link is missing the repo name.", 400, "INVALID_URL");
   }
 
   const owner = parts[0];
   const repo = parts[1].replace(/\.git$/i, "");
   if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repo)) {
-    throw new AppError("That doesn't look like a valid GitHub repository URL.", 400, "INVALID_URL");
+    throw new AppError("That's not a GitHub repo link.", 400, "INVALID_URL");
   }
 
   return { owner, repo, canonicalUrl: `https://github.com/${owner}/${repo}` };
@@ -57,23 +73,32 @@ export function isUsefulPath(path, size = 0) {
   const lower = path.toLowerCase();
   const segments = lower.split("/");
   if (segments.some((segment) => IGNORED_SEGMENTS.has(segment))) return false;
-  if (IGNORED_FILES.test(lower) || size > 45_000) return false;
+  if (IGNORED_FILES.test(lower)) return false;
   const name = segments.at(-1);
   const extension = name.includes(".") ? name.split(".").at(-1) : "";
-  return lower.startsWith("readme") || MANIFEST_NAMES.has(name) || SOURCE_EXTENSIONS.has(extension);
+  // READMEs are worth reading however long they are: content is truncated on fetch.
+  if (segments.length === 1 && name.startsWith("readme")) return true;
+  if (size > MAX_SOURCE_BYTES) return false;
+  return MANIFEST_NAMES.has(name) || SOURCE_EXTENSIONS.has(extension);
 }
 
 export function scorePath(path, size = 0) {
   const lower = path.toLowerCase();
-  const name = lower.split("/").at(-1);
+  const segments = lower.split("/");
+  const name = segments.at(-1);
   let score = 0;
-  if (lower.startsWith("readme")) score += 120;
-  if (MANIFEST_NAMES.has(name)) score += 105;
+  if (segments.length === 1 && name.startsWith("readme")) score += 130;
+  if (MANIFEST_NAMES.has(name)) score += segments.length === 1 ? 105 : 20;
   if (ENTRY_NAMES.test(lower)) score += 90;
-  if (/^(src|app|lib|server|client)\//.test(lower)) score += 28;
-  if (/(route|controller|handler|service|model|store|state|component|view|screen|engine|parser|command)/.test(lower)) score += 22;
-  if (/(test|spec|stories|mock|example|demo)/.test(lower)) score -= 22;
-  score += Math.max(0, 18 - Math.floor(size / 2500));
+  if (/^(src|source|app|lib|server|client|pkg|internal|cmd|core)\//.test(lower)) score += 28;
+  if (/(route|controller|handler|service|model|store|state|component|view|screen|engine|parser|command|core|game|player|api)/.test(lower)) score += 22;
+  if (/\.(?:css|scss|sass|less)$/.test(lower)) score -= 45;
+  if (/(?:^|\/)types?(?:\/|\.)/.test(lower)) score -= 30;
+  if (/\.config\.|(?:^|\/)\.[^/]+$/.test(lower)) score -= 40;
+  if (isTestPath(lower)) score -= 120;
+  score -= Math.max(0, segments.length - 2) * 6;
+  // Small files are cheap to include; very large ones are less likely to be hand-written.
+  score += Math.max(-12, 10 - Math.floor(size / 8000));
   return score;
 }
 
@@ -92,14 +117,23 @@ async function githubJson(url) {
   try {
     response = await fetch(url, { headers: githubHeaders(), signal: AbortSignal.timeout(15_000) });
   } catch {
-    throw new AppError("GitHub could not be reached. Check your connection and try again.", 502, "GITHUB_NETWORK");
+    throw new AppError("Can't reach GitHub right now.", 502, "GITHUB_NETWORK");
   }
 
   if (response.status === 404) {
-    throw new AppError("We couldn't find that public repository. Check the URL or its visibility.", 404, "REPO_NOT_FOUND");
+    throw new AppError("Not found. Is it private?", 404, "REPO_NOT_FOUND");
   }
-  if (response.status === 403 || response.status === 429) {
-    throw new AppError("GitHub's public rate limit was reached. Try again shortly or add GITHUB_TOKEN.", 429, "GITHUB_RATE_LIMIT");
+  if (response.status === 409) {
+    throw new AppError("That repo is empty.", 422, "EMPTY_REPO");
+  }
+  if (response.status === 451) {
+    throw new AppError("GitHub has blocked access to that repository.", 403, "REPO_BLOCKED");
+  }
+  if (response.status === 429 || (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0")) {
+    throw new AppError("GitHub says slow down. Try again soon.", 429, "GITHUB_RATE_LIMIT");
+  }
+  if (response.status === 403) {
+    throw new AppError("GitHub refused access to that repository.", 403, "REPO_FORBIDDEN");
   }
   if (!response.ok) {
     throw new AppError(`GitHub returned an unexpected ${response.status} response.`, 502, "GITHUB_ERROR");
@@ -107,17 +141,23 @@ async function githubJson(url) {
   return response.json();
 }
 
+const encodePath = (path) => path.split("/").map(encodeURIComponent).join("/");
+
+// One unreadable file must never sink the whole analysis, so failures return null.
 async function fetchText(owner, repo, branch, path) {
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(branch)}/${encodedPath}`;
-  const response = await fetch(rawUrl, {
-    headers: { "User-Agent": "tell-itty-mvp" },
-    signal: AbortSignal.timeout(12_000)
-  });
-  if (!response.ok) return null;
-  const text = await response.text();
-  if (text.includes("\u0000")) return null;
-  return text.slice(0, 42_000);
+  const rawUrl = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodePath(branch)}/${encodePath(path)}`;
+  try {
+    const response = await fetch(rawUrl, {
+      headers: { "User-Agent": "tell-itty-mvp" },
+      signal: AbortSignal.timeout(12_000)
+    });
+    if (!response.ok) return null;
+    const text = await response.text();
+    if (text.includes("\u0000")) return null;
+    return text.slice(0, MAX_CHARACTERS_PER_FILE);
+  } catch {
+    return null;
+  }
 }
 
 export async function ingestRepository(repoUrl) {
@@ -126,42 +166,59 @@ export async function ingestRepository(repoUrl) {
   const metadata = await githubJson(base);
 
   if (metadata.private) {
-    throw new AppError("Tell-itty's MVP can only read public repositories.", 403, "PRIVATE_REPO");
+    throw new AppError("Tell-itty can only read public repositories.", 403, "PRIVATE_REPO");
+  }
+  if (metadata.size === 0) {
+    throw new AppError("That repo is empty.", 422, "EMPTY_REPO");
   }
   if (metadata.size > 300_000) {
-    throw new AppError("This repository is too large for the prototype. Try a smaller public project.", 413, "REPO_TOO_LARGE");
+    throw new AppError("Too big for now. Try a smaller repo.", 413, "REPO_TOO_LARGE");
   }
 
-  const tree = await githubJson(`${base}/git/trees/${encodeURIComponent(metadata.default_branch)}?recursive=1`);
+  const tree = await githubJson(`${base}/git/trees/${encodePath(metadata.default_branch)}?recursive=1`);
   if (tree.truncated) {
-    throw new AppError("This repository's file tree is too large for the prototype.", 413, "TREE_TOO_LARGE");
+    throw new AppError("Too big for now. Try a smaller repo.", 413, "TREE_TOO_LARGE");
   }
 
+  const allPaths = (tree.tree || []).filter((item) => item.type === "blob").map((item) => item.path);
+  const pathSet = new Set(allPaths);
   const blobs = (tree.tree || [])
     .filter((item) => item.type === "blob" && isUsefulPath(item.path, item.size))
     .sort((a, b) => scorePath(b.path, b.size) - scorePath(a.path, a.size));
 
   if (!blobs.length) {
-    throw new AppError("We found the repository, but not enough readable source text to build a trail.", 422, "NO_SOURCE");
+    throw new AppError("No readable code in there.", 422, "NO_SOURCE");
   }
 
-  const selected = [];
-  let budget = 0;
-  for (const file of blobs) {
-    if (selected.length >= 24 || budget + Math.min(file.size || 0, 42_000) > 150_000) continue;
-    selected.push(file);
-    budget += Math.min(file.size || 0, 42_000);
-  }
-
-  const contents = await Promise.all(selected.map(async (file) => ({
+  const fetchFiles = (items) => Promise.all(items.map(async (file) => ({
     path: file.path,
     size: file.size || 0,
     content: await fetchText(parsed.owner, parsed.repo, metadata.default_branch, file.path)
   })));
+  const readable = (items) => items.filter((file) => file.content && file.content.trim());
 
-  const files = contents.filter((file) => file.content && file.content.trim());
+  // First pass: the files most likely to matter by name and location.
+  const files = readable(await fetchFiles(blobs.slice(0, FIRST_PASS_FILES)));
   if (!files.length) {
     throw new AppError("We could read the file tree, but not the selected source files.", 502, "CONTENT_UNAVAILABLE");
+  }
+
+  // Second pass: whatever those files import, because real dependencies beat name guessing.
+  const byPath = new Map(blobs.map((item) => [item.path, item]));
+  const have = new Set(files.map((file) => file.path));
+  let characters = files.reduce((total, file) => total + file.content.length, 0);
+  for (let round = 0; round < 2 && files.length < MAX_FILES; round++) {
+    const wanted = [...new Set(files.flatMap((file) => extractLocalImports(file.path, file.content, pathSet)))]
+      .filter((path) => !have.has(path) && byPath.has(path) && !isTestPath(path))
+      .sort((a, b) => scorePath(b, byPath.get(b).size) - scorePath(a, byPath.get(a).size))
+      .slice(0, MAX_FILES - files.length);
+    if (!wanted.length) break;
+    for (const file of readable(await fetchFiles(wanted.map((path) => byPath.get(path))))) {
+      have.add(file.path);
+      if (characters + file.content.length > MAX_TOTAL_CHARACTERS) continue;
+      files.push(file);
+      characters += file.content.length;
+    }
   }
 
   return {
@@ -170,16 +227,16 @@ export async function ingestRepository(repoUrl) {
       name: metadata.name,
       fullName: metadata.full_name,
       url: metadata.html_url,
-      description: metadata.description || "No repository description provided.",
+      description: metadata.description || "",
       language: metadata.language || "Unknown",
       stars: metadata.stargazers_count,
       defaultBranch: metadata.default_branch,
       updatedAt: metadata.updated_at
     },
-    tree: (tree.tree || []).filter((item) => item.type === "blob").map((item) => item.path).slice(0, 1200),
+    tree: allPaths.slice(0, 1200),
     files,
     selection: {
-      discoveredFileCount: (tree.tree || []).filter((item) => item.type === "blob").length,
+      discoveredFileCount: allPaths.length,
       analyzedFileCount: files.length,
       analyzedPaths: files.map((file) => file.path)
     }
@@ -190,7 +247,7 @@ export function compactRepositoryContext(context, maxCharacters = 110_000) {
   const treeText = context.tree.slice(0, 500).join("\n");
   const header = [
     `Repository: ${context.repository.fullName}`,
-    `Description: ${context.repository.description}`,
+    `Description: ${context.repository.description || "(none)"}`,
     `Primary language: ${context.repository.language}`,
     `Default branch: ${context.repository.defaultBranch}`,
     `Selected ${context.selection.analyzedFileCount} of ${context.selection.discoveredFileCount} files.`,
