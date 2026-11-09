@@ -20,6 +20,8 @@ export function landingView(state) {
       </header>
 
       <main class="arch-stage">
+        <div class="arch-frame">
+        ${archShades()}
         <section class="arch glass">
           <img class="arch-cat" src="/assets/cat.png" alt="" aria-hidden="true">
           <h1 data-focus tabindex="-1">you built it.<em>now get it.</em></h1>
@@ -32,8 +34,37 @@ export function landingView(state) {
           </form>
           <p class="repo-helper" id="repo-helper">${state.inputError ? `<span class="repo-error">${escapeHtml(state.inputError)}</span>` : `public repos only · <button class="link-button" type="button" data-action="sample" data-url="${SAMPLE_REPO}">try one</button>`}</p>
         </section>
+        </div>
       </main>
     </div>`;
+}
+
+// left %, width px, height px, gap above the arch px
+const ARCH_SHADES = [
+  [2, 34, 130, 0], [6, 11, 215, 12], [10, 40, 150, 0], [16, 9, 300, 0], [21, 40, 170, 110],
+  [28, 12, 345, 0], [33, 40, 190, 34], [40, 11, 310, 170], [47, 9, 110, 6], [55, 11, 330, 40],
+  [62, 42, 215, 0], [68, 9, 150, 0], [74, 11, 390, 0], [80, 11, 150, 46], [86, 46, 420, 26],
+  [93, 11, 250, 0], [97, 10, 410, 22]
+];
+
+// left % of the arch (outside 0-100 is beside it), width px, height vh
+const SIDE_SHADES = [
+  [-92, 38, 46], [-85, 11, 74], [-77, 42, 38], [-69, 10, 88], [-61, 34, 56], [-53, 11, 68], [-45, 44, 42], [-37, 10, 92],
+  [-29, 36, 60], [-21, 11, 80], [-13, 40, 48], [-5, 10, 70],
+  [105, 11, 64], [113, 42, 52], [121, 10, 90], [129, 36, 44], [137, 11, 76], [145, 44, 60], [153, 10, 94], [161, 38, 40],
+  [169, 11, 72], [177, 40, 54], [185, 10, 86], [192, 36, 48]
+];
+
+function archDepth(left, width, radius) {
+  const fromEdge = (Math.min(left, 100 - left) / 100) * width;
+  return fromEdge >= radius ? 0 : Math.round(radius - Math.sqrt(radius ** 2 - (radius - fromEdge) ** 2));
+}
+
+function archShades() {
+  const bars = ARCH_SHADES.map(([left, width, height, gap]) =>
+    `<i class="arch-shade" style="left:${left}%;--w:${width};--h:${height};--gap:${gap};--c:${archDepth(left, 820, 300)};--cm:${archDepth(left, 343, 170)}"></i>`);
+  const sides = SIDE_SHADES.map(([left, width, height]) => `<i class="arch-shade is-side" style="left:${left}%;--w:${width};--h:${height}"></i>`);
+  return `<div class="arch-shades" aria-hidden="true">${bars.join("")}${sides.join("")}</div>`;
 }
 
 export function loadingBlock(status) {
