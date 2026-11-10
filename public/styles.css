@@ -177,6 +177,10 @@ h1 code, .trail-copy strong code, .rail-name code, .button-title code, .sense-la
 
 .center-stage, .lesson-state { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; text-align: center; }
 .lesson-state { min-height: calc(100vh - 76px); }
+.lesson.glass, .trail-layout.glass {
+  border-bottom: 1px solid rgba(214, 219, 227, .85);
+  --shadow: 0 1px 2px rgba(28, 52, 110, .06), 0 10px 24px -8px rgba(28, 52, 110, .14), 0 34px 70px -22px rgba(28, 52, 110, .3);
+}
 .loading-block, .error-block { display: flex; flex-direction: column; align-items: center; justify-content: center; width: min(460px, 100%); min-height: min(420px, 62vh); padding: 40px 32px; border-radius: 230px 230px 0 0; }
 .loading-block h1, .error-block h1 { font: 400 1.35rem/1.15 var(--display); }
 .loading-cat { width: 74px; margin-bottom: 18px; }
@@ -186,7 +190,7 @@ h1 code, .trail-copy strong code, .rail-name code, .button-title code, .sense-la
 
 /* --- trail ------------------------------------------------------- */
 
-.trail-layout { flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 56px; width: min(880px, 100%); margin: 0 auto; padding: 44px 44px 40px; border-radius: 36px 36px 0 0; }
+.trail-layout { flex: 1; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 56px; width: min(880px, 100%); margin: 0 auto 28px; padding: 44px 44px 40px; border-radius: 36px; }
 .trail-intro { align-self: start; }
 .project-line { color: var(--rose); font: 600 .98rem var(--body); }
 .trail-intro h1 { font: 400 2rem/1.05 var(--display); }
@@ -231,7 +235,7 @@ h1 code, .trail-copy strong code, .rail-name code, .button-title code, .sense-la
 
 .lesson-layout { flex: 1; width: min(980px, 100%); margin: 0 auto; }
 .lesson-main { min-width: 0; }
-.lesson { display: flex; flex-direction: column; min-height: calc(100vh - 76px); padding: 20px 36px 26px; border-radius: 36px 36px 0 0; animation: rise 400ms var(--ease) both; }
+.lesson { display: flex; flex-direction: column; min-height: calc(100vh - 104px); margin-bottom: 28px; padding: 20px 36px 26px; border-radius: 36px; animation: rise 400ms var(--ease) both; }
 .lesson-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .stage-tabs { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, .28); overflow-x: auto; scrollbar-width: none; }
 .stage-tab { flex: none; padding: 6px 14px; border-radius: 999px; color: var(--ink-soft); font: 600 .94rem/1.15 var(--body); text-decoration: none; transition: background 200ms ease, color 200ms ease; }
@@ -432,10 +436,10 @@ fieldset:disabled .answer:not(.is-right) { opacity: .5; transform: none; cursor:
   .page { padding: 0 12px; }
   .app-header { min-height: 62px; gap: 10px; }
   .header-end { gap: 12px; }
-  .trail-layout { padding: 28px 16px 28px; gap: 24px; border-radius: 30px 30px 0 0; }
+  .trail-layout { padding: 28px 16px 28px; gap: 24px; margin-bottom: 16px; border-radius: 30px; }
   .perch-cat { right: 120px; }
   .trail-step { margin-left: 0; }
-  .lesson { padding: 12px 14px 18px; border-radius: 30px 30px 0 0; min-height: calc(100vh - 62px); }
+  .lesson { padding: 12px 14px 18px; margin-bottom: 16px; border-radius: 30px; min-height: calc(100vh - 78px); }
   .lesson-top { flex-direction: column; align-items: stretch; }
   .crumb-arrows { justify-content: flex-end; }
   .stage-tabs { flex-wrap: wrap; justify-content: space-between; border-radius: 22px; overflow: visible; }
