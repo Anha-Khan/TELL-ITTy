@@ -231,6 +231,20 @@ h1 code, .trail-copy strong code, .rail-name code, .button-title code, .sense-la
 .is-current .trail-node { color: #fff; background: var(--rose); }
 .perch-cat { position: absolute; bottom: calc(100% - 4px); right: 72px; width: 40px; pointer-events: none; }
 
+@media (min-width: 1081px) {
+  .page:has(> .trail-layout) { padding-bottom: 28px; }
+  .trail-layout { flex: none; grid-template-columns: 330px minmax(0, 1fr); gap: 72px; width: min(1080px, 100%); margin: auto; padding: 60px 64px 56px; }
+  .trail-intro { position: sticky; top: 40px; align-self: center; }
+  .project-line { font-size: 1.1rem; }
+  .trail-intro h1 { font-size: 3rem; white-space: nowrap; }
+  .project-summary { margin-top: 14px; font-size: 1.12rem; line-height: 1.45; }
+  .trail-cta { margin-top: 32px; }
+  .trail-step + .trail-step { margin-top: 10px; }
+  .trail-link { gap: 18px; padding: 10px 22px 10px 10px; }
+  .trail-copy strong { font-size: 1.22rem; }
+  .perch-cat { width: 58px; right: 96px; }
+}
+
 /* --- lesson shell ------------------------------------------------ */
 
 .lesson-layout { flex: 1; width: min(980px, 100%); margin: 0 auto; }
