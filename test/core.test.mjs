@@ -182,3 +182,90 @@ test("the model path parses a response and falls back honestly when it fails", a
     delete process.env.OPENAI_API_KEY;
   }
 });
+
+// --- regressions found by fault testing ---------------------------------------------
+
+const repoOf = (name, files, extra = {}) => ({
+  repository: { owner: "someone", name, fullName: `someone/${name}`, url: `https://github.com/someone/${name}`, description: "", language: "Unknown", defaultBranch: "main", ...extra },
+  tree: files.map((file) => file.path),
+  files,
+  selection: { analyzedFileCount: files.length, discoveredFileCount: files.length, analyzedPaths: files.map((file) => file.path) }
+});
+
+const everyLesson = (repo) => {
+  const analysis = buildEvidenceAnalysis(repo);
+  return { analysis, lessons: analysis.learningTrail.map((step) => buildEvidenceLesson(repo, analysis, step)) };
+};
+
+test("a repository with no recognisable code still builds every lesson with a real quiz", () => {
+  const repo = repoOf("awesome", [
+    { path: "README.md", content: "# Awesome\n\nA curated list of awesome lists about all kinds of interesting topics." },
+    { path: ".github/workflows/lint.sh", content: "#!/bin/sh\nnpx awesome-lint" }
+  ]);
+  const { analysis, lessons } = everyLesson(repo);
+  assert.ok(analysis.project.entryPoints.length >= 1);
+  for (const lesson of lessons) assert.ok(lesson.check.choices.length >= 2, lesson.title);
+});
+
+test("a Makefile target with no npm-style name never says undefined", () => {
+  const repo = repoOf("dotenvish", [
+    { path: "Makefile", content: "install:\n\tcomposer install\n\ntest:\n\tvendor/bin/phpunit\n" },
+    { path: "src/Loader.php", content: "<?php\nclass Loader {\n  public function load($path) {\n    return $this->read($path);\n  }\n  public function read($path) {\n    return file_get_contents($path);\n  }\n}\n" }
+  ]);
+  const { lessons } = everyLesson(repo);
+  assert.doesNotMatch(JSON.stringify(lessons), /\bundefined\b/);
+});
+
+test("the entry quiz never answers with the call it deletes, and lessons don't repeat quizzes", () => {
+  const repo = repoOf("tool", [
+    { path: "main.go", content: "package main\n\nfunc main() {\n\tsetup()\n\trun()\n}\n\nfunc setup() {\n\tconfigure()\n}\n\nfunc configure() {\n\tx := 1\n\t_ = x\n}\n\nfunc run() {\n\tloop()\n}\n\nfunc loop() {\n\ty := 2\n\t_ = y\n}\n" }
+  ]);
+  const { lessons } = everyLesson(repo);
+  for (const lesson of lessons) {
+    const deleted = lesson.check.question.match(/Delete the `(\w+)` call/)?.[1];
+    if (deleted) assert.ok(!lesson.check.choices[lesson.check.answerIndex].startsWith(`\`${deleted}\``), lesson.check.question);
+  }
+  const questions = lessons.map((lesson) => lesson.check.question);
+  assert.equal(new Set(questions).size, questions.length, questions.join(" | "));
+});
+
+test("per-platform copies of one function become one lesson, not two", () => {
+  const body = "package xid\n\nfunc readPlatformMachineID() (string, error) {\n\tvalue := lookup()\n\treturn value, nil\n}\n";
+  const repo = repoOf("xid", [
+    { path: "id.go", content: "package xid\n\nfunc New() ID {\n\tid := readPlatformMachineID()\n\treturn id\n}\n\nfunc lookup() string {\n\treturn \"\"\n}\n" },
+    { path: "hostid_linux.go", content: body },
+    { path: "hostid_darwin.go", content: body }
+  ]);
+  const titles = buildEvidenceAnalysis(repo).learningTrail.map((step) => step.title);
+  assert.equal(new Set(titles).size, titles.length, titles.join(" | "));
+});
+
+test("a package call like sha256.New() is not linked to the project's own New", () => {
+  const graph = buildCodeGraph(repoOf("xid", [
+    { path: "id.go", content: "package xid\n\nfunc New() ID {\n\treturn ID{}\n}\n" },
+    { path: "hostid.go", content: "package xid\n\nfunc machineID() []byte {\n\thw := sha256.New()\n\treturn hw.Sum(nil)\n}\n" }
+  ]));
+  const newDefinition = graph.definitions.find((definition) => definition.name === "New");
+  assert.equal(newDefinition.callers.length, 0);
+});
+
+test("Rust attributes are not mistaken for documentation", () => {
+  const graph = buildCodeGraph(repoOf("itoa", [
+    { path: "src/lib.rs", content: "#[inline]\n#[cfg_attr(feature = \"no-panic\", no_panic)]\npub fn mulhi(a: u64) -> u64 {\n    a\n}\n" }
+  ]));
+  assert.equal(graph.definitions.find((definition) => definition.name === "mulhi").doc, "");
+});
+
+test("project summaries keep underscores in names and drop emoji codes", () => {
+  const repo = repoOf("phpdotenv", [{ path: "src/Dotenv.php", content: "<?php\nfunction load() {\n  return 1;\n}\n" }], { description: ":tada: Loads variables from .env to $_ENV and _SERVER_ automagically." });
+  assert.equal(buildEvidenceAnalysis(repo).project.summary, "Loads variables from .env to $_ENV and SERVER automagically.");
+});
+
+test("HTML inside a README never leaks into the headline", () => {
+  const repo = repoOf("awesome", [
+    { path: "README.md", content: "# Awesome\n\nJust type <a href=\"https://awesome.re\"><code>awesome.re</code></a> to go here. It lists the best lists." },
+    { path: "src/index.js", content: "export function go() {\n  return 1;\n}\n" }
+  ]);
+  const { lessons } = everyLesson(repo);
+  assert.equal(lessons[0].plain.headline, "Just type awesome.re to go here.");
+});

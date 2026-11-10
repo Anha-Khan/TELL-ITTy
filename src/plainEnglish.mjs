@@ -14,7 +14,7 @@ const VERBS = [
   { verbs: ["is", "are"], yesNo: true, title: (_, rest) => `${capital(questionOf(rest))}?`, say: (rest) => `answers one question: ${questionOf(rest)}?`, like: "Like a bouncer with a guest list: yes or no." },
   { verbs: ["has", "have"], yesNo: true, say: (rest) => `answers one question: is there ${article(rest[0])} ${rest.join(" ")}?`, like: "Like checking your pocket for keys: yes or no." },
   { verbs: ["can", "should", "may"], yesNo: true, say: (rest, verb) => `answers one question: ${verb} it ${rest.join(" ")}?`, like: "Like asking permission: yes or no." },
-  { verbs: ["check", "validate", "verify", "ensure", "assert"], title: (s) => `Checking ${s}`, say: (_, __, s) => `makes sure the ${s} is OK.`, like: "Like a ticket inspector: nothing wrong gets past." },
+  { verbs: ["check", "validate", "verify", "ensure", "assert"], title: (s) => `Checking ${s}`, say: (rest, __, s) => rest[0] === "not" ? `makes sure it's ${s}.` : `makes sure the ${s} is OK.`, like: "Like a ticket inspector: nothing wrong gets past." },
   { verbs: ["configure", "config", "setup", "init", "initialize", "prepare"], title: (s) => `Setting up ${s}`, say: (_, __, s) => `works out the ${s} settings.`, like: "Like filling in a form before you start." },
   { verbs: ["set"], title: (s) => `Setting ${s}`, say: (_, __, s) => `fills in the ${s}.`, like: "Like writing a name on a label." },
   { verbs: ["apply", "use", "attach"], title: (s) => `Applying ${s}`, say: (_, __, s) => `puts the ${s} in place.`, like: "Like sticking the stamps on before posting a letter." },

@@ -1,5 +1,5 @@
 import { analyzeRepo, generateLesson } from "./api.js";
-import { analysisLoadingView, drawTrailLine, landingView, repoErrorView, trailView } from "./views.js";
+import { analysisLoadingView, drawTrailLine, landingView, repoErrorView, repoHelper, trailView } from "./views.js";
 import { lessonErrorView, lessonLoadingView, lessonView, STAGES } from "./lesson.js";
 
 const app = document.querySelector("#app");
@@ -366,7 +366,7 @@ app.addEventListener("input", (event) => {
     state.inputError = "";
     event.target.removeAttribute("aria-invalid");
     event.target.closest("form").classList.remove("has-error");
-    document.querySelector("#repo-helper").textContent = "public repos only";
+    document.querySelector("#repo-helper").innerHTML = repoHelper();
   }
 });
 

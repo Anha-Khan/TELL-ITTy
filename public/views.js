@@ -12,6 +12,8 @@ export function appHeader(state) {
     </header>`;
 }
 
+export const repoHelper = () => `public repos only · <button class="link-button" type="button" data-action="sample" data-url="${SAMPLE_REPO}">try one</button>`;
+
 export function landingView(state) {
   return `
     <div class="landing">
@@ -32,7 +34,7 @@ export function landingView(state) {
             <input id="repo-url" name="repoUrl" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github.com/you/repo" value="${escapeHtml(state.repoUrl)}" aria-describedby="repo-helper"${state.inputError ? ' aria-invalid="true"' : ""}>
             <button class="button button-primary" type="submit">Start ${icon("arrow")}</button>
           </form>
-          <p class="repo-helper" id="repo-helper">${state.inputError ? `<span class="repo-error">${escapeHtml(state.inputError)}</span>` : `public repos only · <button class="link-button" type="button" data-action="sample" data-url="${SAMPLE_REPO}">try one</button>`}</p>
+          <p class="repo-helper" id="repo-helper">${state.inputError ? `<span class="repo-error">${escapeHtml(state.inputError)}</span>` : repoHelper()}</p>
         </section>
         </div>
       </main>

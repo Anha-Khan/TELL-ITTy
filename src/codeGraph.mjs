@@ -19,7 +19,7 @@ const COMMON_MEMBER_NAMES = new Set([
   "read", "write", "send", "next", "clone", "parse", "format", "append", "remove", "length", "sort", "log", "error", "warn"
 ]);
 
-const TEST_PATH = /(?:^|\/)(?:tests?|__tests__|specs?|e2e|examples?|demos?|fixtures?|mocks?|stories|benchmarks?)(?:\/|$)|[._-](?:test|spec|stories)\.[^/]+$|(?:^|\/)test_[^/]+$/i;
+const TEST_PATH = /(?:^|\/)(?:tests?|__tests__|specs?|e2e|examples?|demos?|fixtures?|mocks?|stories|benchmarks?|benches)(?:\/|$)|[._-](?:test|spec|stories)\.[^/]+$|(?:^|\/)(?:test_[^/]+|bench(?:mark)?s?\.[^/]+)$/i;
 
 export const isTestPath = (path) => TEST_PATH.test(path);
 
@@ -154,8 +154,13 @@ function leadingDoc(lines, start) {
   const collected = [];
   for (let index = start - 1; index >= 0 && start - index < 8; index--) {
     const trimmed = lines[index].trim();
-    if (!trimmed || !/^(?:\/\/|\/\*|\*|#(?![a-z]*include)|--)/.test(trimmed)) break;
+    // `#` counts as a comment only before a space: `#[inline]`, `#define` and `#endif` are code.
+    if (!trimmed || !/^(?:\/\/|\/\*|\*|#+(?:\s|$)|--)/.test(trimmed)) break;
     collected.unshift(trimmed.replace(/^(?:\/\*\*?|\*\/|\*|\/\/+|#+|--)\s?/, "").replace(/\*\/$/, "").trim());
+  }
+  for (let index = 0; index < collected.length; index++) {
+    // Javadoc and JSDoc markup: `{@code Entry}` → `Entry`, `<p>` → nothing.
+    collected[index] = collected[index].replace(/\{@\w+\s+([^}]*)\}/g, "$1").replace(/<\/?[a-z][^>]*>/gi, "").trim();
   }
   if (!collected.length) {
     const next = (lines[start + 1] || "").trim();
@@ -197,6 +202,8 @@ function findDefinitions(path, lines, masked) {
       path,
       startLine: index + 1,
       endLine: endLine + 1,
+      // Methods sit indented inside a class or module; Go methods name a receiver.
+      member: /^\s/.test(line) || /^func\s*\(/.test(line),
       doc: leadingDoc(lines, index),
       calls: [],
       callers: []
@@ -326,11 +333,13 @@ export function buildCodeGraph(context) {
   }
 
   const resolve = (name, fromPath, isMember) => {
-    const candidates = definitionsByName.get(name);
-    if (!candidates) return null;
+    const imported = imports.get(fromPath) || new Set();
+    // `sha256.New()` or `obj.helper()` is a method or another package's function, not a
+    // top-level function of this project, unless that function's file is imported here.
+    const candidates = definitionsByName.get(name)?.filter((definition) => !isMember || definition.member || definition.kind === "class" || imported.has(definition.path));
+    if (!candidates?.length) return null;
     const sameFile = candidates.filter((definition) => definition.path === fromPath);
     if (sameFile.length) return sameFile[0];
-    const imported = imports.get(fromPath) || new Set();
     const viaImport = candidates.filter((definition) => imported.has(definition.path));
     if (viaImport.length === 1) return viaImport[0];
     if (isMember && COMMON_MEMBER_NAMES.has(name)) return null;

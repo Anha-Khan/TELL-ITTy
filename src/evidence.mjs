@@ -89,7 +89,9 @@ const TOOL_NOTES = [
 ];
 const SCRIPT_ROLES = {
   dev: "starts it locally while you work", start: "starts it", serve: "starts it locally", build: "produces the finished output", test: "runs its automated checks",
-  lint: "checks the code without running it", format: "tidies the code's formatting", deploy: "ships it", preview: "runs the built output locally", typecheck: "checks types without running it"
+  lint: "checks the code without running it", format: "tidies the code's formatting", deploy: "ships it", preview: "runs the built output locally", typecheck: "checks types without running it",
+  // Common Makefile targets.
+  all: "builds everything", run: "starts it", install: "installs it", clean: "deletes what the build produced", check: "runs its automated checks"
 };
 const DEPLOY_FILES = [[/^vercel\.json$/, "Vercel"], [/^netlify\.toml$/, "Netlify"], [/^fly\.toml$/, "Fly.io"], [/^Procfile$/, "a Procfile host such as Heroku"], [/^render\.yaml$/, "Render"], [/^Dockerfile$/, "a Docker container"], [/^\.github\/workflows\//, "a GitHub Actions workflow"]];
 
@@ -140,12 +142,22 @@ function chooseEntry(context, graph) {
     .filter((file) => /(?:^|\/)(?:main|index|app|server|program|cli|application|game|lib|mod|__init__)\.[^/]+$/i.test(file.path) && !isTestPath(file.path) && !/\.(?:css|scss|json)$/.test(file.path))
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length)
     .map((file) => file.path);
-  const fallback = context.files
-    .filter((file) => graph.files.get(file.path)?.definitions.length && !isTestPath(file.path))
-    .sort((a, b) => (graph.imports.get(b.path)?.size || 0) - (graph.imports.get(a.path)?.size || 0) || a.path.split("/").length - b.path.split("/").length)
+  // A library's front door is usually the file named after it (`Dotenv.php` in phpdotenv).
+  const squash = (text) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const repoName = squash(context.repository?.name || "");
+  const definitionCount = (path) => graph.files.get(path)?.definitions.length || 0;
+  const namedAfterRepo = context.files
+    .filter((file) => { const stem = squash(baseName(file.path).replace(/\.[^.]+$/, "")); return stem.length >= 3 && repoName.includes(stem) && definitionCount(file.path) && !isTestPath(file.path); })
+    .sort((a, b) => definitionCount(b.path) - definitionCount(a.path))
     .map((file) => file.path);
-  const ordered = [...new Set([...candidates, ...mainDefinitions, ...pythonMains, ...byName, ...fallback])];
-  const path = ordered[0] || context.files.find((file) => !/readme|package\.json/i.test(file.path))?.path || context.files[0].path;
+  const fallback = context.files
+    .filter((file) => definitionCount(file.path) && !isTestPath(file.path))
+    .sort((a, b) => (graph.imports.get(b.path)?.size || 0) - (graph.imports.get(a.path)?.size || 0) || definitionCount(b.path) - definitionCount(a.path) || a.path.split("/").length - b.path.split("/").length)
+    .map((file) => file.path);
+  const found = [...new Set([...candidates, ...mainDefinitions, ...pythonMains, ...byName, ...namedAfterRepo, ...fallback])];
+  const path = found[0] || context.files.find((file) => !/readme|package\.json/i.test(file.path))?.path || context.files[0].path;
+  // The chosen path always leads the list, even when no rule above matched it.
+  const ordered = [path, ...found.filter((item) => item !== path)];
   const file = graph.files.get(path);
   const named = file.definitions.find((definition) => definition.name === "main");
   let node = named || file.top;
@@ -173,13 +185,17 @@ function rankCore(graph, entry) {
     .sort((a, b) => b.score - a.score);
 
   // Prefer breadth: one concept per file first, then fill in with runners-up.
+  // One lesson per idea: per-platform copies (`hostid_linux.go`, `hostid_darwin.go`) and
+  // private twins (`_rawString` behind `rawString`) would read as the same lesson twice.
   const picked = [];
   const usedFiles = new Set();
+  const usedNames = new Set();
+  const take = (definition) => { picked.push(definition); usedFiles.add(definition.path); usedNames.add(humanize(definition.name)); };
   for (const { definition } of scored) {
-    if (picked.length < 4 && !usedFiles.has(definition.path)) { picked.push(definition); usedFiles.add(definition.path); }
+    if (picked.length < 4 && !usedFiles.has(definition.path) && !usedNames.has(humanize(definition.name))) take(definition);
   }
   for (const { definition } of scored) {
-    if (picked.length < 3 && !picked.includes(definition)) picked.push(definition);
+    if (picked.length < 3 && !picked.includes(definition) && !usedNames.has(humanize(definition.name))) take(definition);
   }
 
   // Teach in the order the program reaches things.
@@ -333,7 +349,7 @@ export function buildEvidenceAnalysis(context) {
   return {
     project: {
       name,
-      summary: context.repository.description || readmeSummary(context) || `A ${projectType.toLowerCase()} with its starting point in ${entry.path}.`,
+      summary: cleanDescription(context.repository.description) || readmeSummary(context) || `A ${projectType.toLowerCase()} with its starting point in ${entry.path}.`,
       projectType,
       stack,
       entryPoints: entry.ordered,
@@ -353,7 +369,7 @@ function readmeSummary(context) {
   const readme = context.files.find((file) => /^readme/i.test(file.path));
   if (!readme) return "";
   const paragraph = readme.content.split(/\n\s*\n/).map((block) => block.trim()).find((block) => block.length > 40 && /^[A-Za-z`*]/.test(block));
-  return paragraph ? paragraph.replace(/[*_`[\]]/g, "").replace(/\(https?:[^)]+\)/g, "").split(/(?<=[.!?])\s/)[0].slice(0, 220) : "";
+  return paragraph ? stripMarkdown(paragraph).replace(/[[\]]/g, "").replace(/\(https?:[^)]+\)/g, "").split(/(?<=[.!?])\s/)[0].slice(0, 220) : "";
 }
 
 // --- lesson building -------------------------------------------------------------
@@ -440,8 +456,17 @@ function checkForDefinition(graph, definition, seed) {
   return null;
 }
 
+// Wrong answers for a "which file?" question. Tiny repositories may have only one other
+// file we read, so fall back to the README, then to files we saw in the tree.
+function otherFiles(context, path, seed, skip = /^readme/i) {
+  const read = seededOrder(context.files.filter((file) => file.path !== path && !skip.test(file.path)), seed).map((file) => file.path);
+  const readmes = context.files.filter((file) => file.path !== path && /^readme/i.test(file.path)).map((file) => file.path);
+  const seen = seededOrder(context.tree.filter((item) => item !== path && !item.startsWith(".") && !read.includes(item) && !readmes.includes(item)), seed);
+  return [...read, ...readmes, ...seen].slice(0, 3).map((item) => ({ path: item }));
+}
+
 function fileCheck(context, graph, path, seed, objective) {
-  const others = seededOrder(context.files.filter((file) => file.path !== path && !/^readme/i.test(file.path)), seed).slice(0, 3);
+  const others = otherFiles(context, path, seed);
   return assembleCheck({
     seed,
     question: `To change “${objective.replace(/`/g, "")}”, which file do you open?`,
@@ -640,7 +665,8 @@ function buildLesson(context, graph, analysis, plan) {
   const entryPath = analysis.project.entryPoints[0];
   const stages = [recipe.install && "install", recipe.main && recipe.main.name, known.find((script) => script.name === "build")?.name, known.find((script) => script.name === "test")?.name, hosting.length && "ship"].filter(Boolean);
   const diagram = [...new Set(stages)];
-  const startScript = recipe.main && recipe.scripts.includes(recipe.main) ? recipe.main : known.find((script) => script.name === "test");
+  // Only scripts with a known role can be described, so only those can be the answer.
+  const startScript = recipe.main && known.includes(recipe.main) ? recipe.main : known.find((script) => script.name === "test");
   const wrongScripts = known.filter((script) => script !== startScript && !(startScript?.name !== "test" && ["dev", "start", "serve", "preview"].includes(script.name))).slice(0, 3);
   const check = startScript && wrongScripts.length ? assembleCheck({
     seed,
@@ -652,7 +678,7 @@ function buildLesson(context, graph, analysis, plan) {
     seed,
     question: "Where do new dependencies get listed?",
     correct: `\`${path}\``,
-    wrong: seededOrder(context.files.filter((item) => item.path !== path && !/^readme/i.test(item.path)), seed).slice(0, 3).map((item) => ({ text: `\`${item.path}\``, why: `\`${baseName(item.path)}\` may use a dependency, but it isn't where the project declares them.` })),
+    wrong: otherFiles(context, path, seed).map((item) => ({ text: `\`${item.path}\``, why: `\`${baseName(item.path)}\` may use a dependency, but it isn't where the project declares them.` })),
     explanation: `\`${path}\` is the project's own list of what it needs.`
   });
 
@@ -681,8 +707,7 @@ function buildLesson(context, graph, analysis, plan) {
 }
 
 function fileCheckForEntry(context, entryPath, seed) {
-  const others = seededOrder(context.files.filter((file) => file.path !== entryPath && !/^readme|\.(?:json|toml|css|lock)$/i.test(file.path)), seed).slice(0, 3);
-  const pool = others.length ? others : context.files.filter((file) => file.path !== entryPath).slice(0, 3);
+  const pool = otherFiles(context, entryPath, seed, /^readme|\.(?:json|toml|css|lock)$/i);
   return assembleCheck({
     seed,
     question: "What runs first? Which file do you open?",
@@ -707,26 +732,40 @@ function entryLesson(context, graph, analysis, plan) {
   const callees = node.calls;
   const seed = plan.id + node.id;
   let check = null;
-  if (callees.length) {
-    const removed = callees[0].target;
+  // Only ask "what stops running?" when deleting the call silences something besides the
+  // deleted function itself; otherwise the answer would just repeat the question.
+  for (const { target: removed } of callees) {
     const stillReachable = reachableFrom(node, { skip: removed });
-    const lost = [...reachableFrom(removed)].filter((item) => !stillReachable.has(item) && item !== removed && item.kind !== "class")[0];
-    const answer = lost || removed;
-    const exclude = new Set([answer, removed, node, ...stillReachable].filter((item) => item.kind !== "top" || item === node));
-    const stay = [...stillReachable].filter((item) => item !== node && item.kind !== "top" && item.kind !== "class");
+    const lost = [...reachableFrom(removed)].find((item) => !stillReachable.has(item) && item !== removed && item.kind !== "class" && item.name !== removed.name);
+    if (!lost) continue;
+    const exclude = new Set([lost, removed, node, ...stillReachable].filter((item) => item.kind !== "top" || item === node));
+    const stay = [...stillReachable].filter((item) => item !== node && item.kind !== "top" && item.kind !== "class" && item.name !== lost.name);
     const distractors = seededOrder(stay, seed).concat(otherDefinitions(graph, exclude, seed)).slice(0, 3);
+    if (!distractors.length) continue;
+    check = assembleCheck({
+      seed,
+      question: `Delete the \`${removed.name}\` call. What else stops running?`,
+      correct: inFile(lost),
+      wrong: distractors.map((item) => ({
+        text: inFile(item),
+        why: stillReachable.has(item) ? `\`${item.name}\` is still reached another way, so removing that one call doesn't stop it.` : `\`${item.name}\` isn't reached through \`${removed.name}\`, so that call doesn't control it.`
+      })),
+      explanation: `\`${lost.name}\` is only reached through \`${removed.name}\`. Remove the first link and everything behind it goes quiet too.`
+    });
+    break;
+  }
+  if (!check && callees.length) {
+    const direct = new Set(callees.map((call) => call.target));
+    const directNames = new Set([...direct].map((item) => item.name));
+    const distractors = otherDefinitions(graph, new Set([node, ...direct]), seed).filter((item) => !directNames.has(item.name)).slice(0, 3);
     if (distractors.length) {
+      const first = callees[0];
       check = assembleCheck({
         seed,
-        question: `Delete the \`${removed.name}\` call. What stops running?`,
-        correct: inFile(answer),
-        wrong: distractors.map((item) => ({
-          text: inFile(item),
-          why: stillReachable.has(item) ? `\`${item.name}\` is still reached another way, so removing that one call doesn't stop it.` : `\`${item.name}\` isn't reached through \`${removed.name}\`, so that call doesn't control it.`
-        })),
-        explanation: answer === removed
-          ? `\`${removed.name}\` only runs because that line calls it.`
-          : `\`${answer.name}\` is only reached through \`${removed.name}\`. Remove the first link and everything behind it goes quiet too.`
+        question: `Which of these does ${node.kind === "top" ? `\`${baseName(node.path)}\`` : `\`${node.name}\``} hand work to directly?`,
+        correct: inFile(first.target),
+        wrong: distractors.map((item) => ({ text: inFile(item), why: `\`${item.name}\` isn't called from here. It may run later, through something else.` })),
+        explanation: `Line ${first.line} calls \`${first.target.name}\`.`
       });
     }
   }
@@ -747,7 +786,8 @@ function entryLesson(context, graph, analysis, plan) {
     code: [block],
     walkthrough: walkthroughForDefinition(graph, node, block),
     connections: callees.slice(0, 3).map((call) => connection(baseName(node.path), call.target.name, `Line ${call.line}. ${call.target.path === node.path ? "Defined in the same file." : `Defined in \`${call.target.path}\`.`}`)),
-    check: check || (rankCore(graph, entry)[0] && checkForDefinition(graph, rankCore(graph, entry)[0], seed)) || fileCheckForEntry(context, node.path, seed),
+    // A core definition's quiz would repeat its own lesson's quiz, so fall back to the file.
+    check: check || fileCheckForEntry(context, node.path, seed),
     tryIt: callees.length
       ? `Add a one-line log just before the call to \`${callees[0].target.name}\` in \`${node.path}\`. Before you run it: will it print once or many times?`
       : `Add a one-line log at the top of \`${node.path}\` and run the project. Does it print before anything else you can see?`
@@ -917,7 +957,8 @@ function changeLesson(context, graph, analysis, plan) {
         correct: inFile(firstCaller),
         wrong: distractors.map((item) => ({ text: inFile(item), why: `\`${item.name}\` doesn't call \`${target.name}\`, so running it alone won't reach your log line.` })),
         explanation: `\`${firstCaller.name}\` calls \`${target.name}\` on line ${target.callers[0].line}. Your log only prints when something calls the function it's in.`
-      }) : lesson.check,
+      // `target` already has a concept lesson; reusing its quiz would ask the same thing twice.
+      }) : fileCheck(context, graph, target.path, seed, `\`${target.name}\``),
       whyItMatters: "Predict a change correctly and the code is yours.",
       tryIt: `Log at the top of \`${target.name}\`. How many times does it print?`
     };
@@ -926,8 +967,21 @@ function changeLesson(context, graph, analysis, plan) {
   return { ...fileLesson(context, graph, analysis, { ...plan, path }), tryIt: `Change one small piece of text or value in \`${path}\`. Predict what will look different, then run the project and check.` };
 }
 
+// Removes markdown decoration and GitHub emoji codes such as `:tada:`, but keeps the
+// underscores inside names like `$_ENV` or `snake_case`.
+function stripMarkdown(markdown) {
+  return markdown
+    .replace(/<!--[\s\S]*?-->/g, "").replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(^|\s):[a-z0-9_+-]+:(?=\s|$)/g, "$1")
+    .replace(/[#*`>]/g, "").replace(/(^|[\s(])_+|_+(?=[\s.,;:!?)]|$)/g, "$1")
+    .replace(/\s+/g, " ").trim();
+}
+
+export const cleanDescription = (text) => stripMarkdown(String(text || ""));
+
 function cleanSentence(markdown) {
-  const text = markdown.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim();
+  const text = stripMarkdown(markdown);
   const sentence = text.match(/^.{20,}?[.!?](?=\s|$)/)?.[0] || text;
   return sentence.length > 150 ? `${sentence.slice(0, 147).replace(/\s+\S*$/, "")}…` : sentence;
 }

@@ -51,11 +51,16 @@ async function readJson(request) {
     if (length > MAX_BODY_BYTES) throw new AppError("Request body is too large.", 413, "BODY_TOO_LARGE");
     chunks.push(chunk);
   }
+  let body;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
   } catch {
     throw new AppError("The request body must be valid JSON.", 400, "INVALID_JSON");
   }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new AppError("The request body must be a JSON object.", 400, "INVALID_JSON");
+  }
+  return body;
 }
 
 // Re-analyzing the same repo costs GitHub quota and model tokens for nothing,
@@ -101,6 +106,7 @@ async function handleApi(request, response, url) {
 
   if (request.method === "POST" && url.pathname === "/api/analyze-repo") {
     const { repoUrl } = await readJson(request);
+    if (typeof repoUrl !== "string") throw new AppError("That's not a GitHub repo link.", 400, "INVALID_URL");
     const { sessionId, session } = await analyzeOnce(repoUrl);
     return sendJson(response, 200, publicSession(session.context, session.result, sessionId));
   }
@@ -134,6 +140,7 @@ async function serveStatic(response, pathname) {
   } catch {
     decoded = "/index.html";
   }
+  if (decoded.includes("\0")) return sendJson(response, 404, { error: { code: "NOT_FOUND", message: "File not found." } });
   const filePath = resolve(PUBLIC_DIR, `.${decoded}`);
   if (filePath !== PUBLIC_DIR && !filePath.startsWith(`${PUBLIC_DIR}${sep}`)) {
     return sendJson(response, 403, { error: { code: "FORBIDDEN", message: "Forbidden." } });
@@ -161,7 +168,8 @@ async function serveStatic(response, pathname) {
 
 const server = createServer(async (request, response) => {
   try {
-    const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    // Only the path matters here, so a malformed Host header can't break URL parsing.
+    const url = new URL(request.url, "http://localhost");
     const handled = await handleApi(request, response, url);
     if (handled !== false) return;
     if (!new Set(["GET", "HEAD"]).has(request.method)) {
